@@ -228,8 +228,8 @@ class S3StorageService implements StorageService {
 	private readonly client: S3Client;
 
 	constructor() {
-		if (!env.S3_ACCESS_KEY_ID || !env.S3_SECRET_ACCESS_KEY || !env.S3_BUCKET) {
-			throw new Error("S3 credentials are not set");
+		if (!env.S3_BUCKET) {
+			throw new Error("S3 bucket is not set");
 		}
 
 		this.bucket = env.S3_BUCKET;
@@ -237,10 +237,19 @@ class S3StorageService implements StorageService {
 			region: env.S3_REGION,
 			forcePathStyle: env.S3_FORCE_PATH_STYLE,
 			...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT } : {}),
-			credentials: {
-				accessKeyId: env.S3_ACCESS_KEY_ID,
-				secretAccessKey: env.S3_SECRET_ACCESS_KEY,
-			},
+			// Static keys stay supported for local/dev use. In production, omitting
+			// `credentials` here falls through to the AWS SDK's default provider
+			// chain, which resolves AWS_WEB_IDENTITY_TOKEN_FILE/AWS_ROLE_ARN --
+			// injected by a pod-identity webhook (IRSA or IRSA-equivalent) -- with
+			// no static keys anywhere.
+			...(env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
+				? {
+						credentials: {
+							accessKeyId: env.S3_ACCESS_KEY_ID,
+							secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+						},
+					}
+				: {}),
 		});
 	}
 
@@ -251,12 +260,16 @@ class S3StorageService implements StorageService {
 		return response.Contents.map((object) => object.Key ?? "");
 	}
 
-	async write({ key, data, contentType, private: isPrivate }: StorageWriteInput): Promise<void> {
+	async write({ key, data, contentType }: StorageWriteInput): Promise<void> {
+		// No ACL: modern S3 buckets default to Object Ownership = "Bucket owner
+		// enforced" (ACLs disabled entirely since April 2023), and a PutObject
+		// call carrying an ACL header fails outright against one. Reads are
+		// always proxied through the app server (see apps/server static uploads
+		// handler), never a direct-to-S3 URL, so the ACL was doing nothing useful.
 		const command = new PutObjectCommand({
 			Bucket: this.bucket,
 			Key: key,
 			Body: data,
-			ACL: isPrivate ? "private" : "public-read",
 			ContentType: contentType,
 		});
 
@@ -322,7 +335,11 @@ class S3StorageService implements StorageService {
 }
 
 function createStorageService(): StorageService {
-	if (env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY && env.S3_BUCKET) {
+	// S3_BUCKET alone is enough to select the S3 backend -- static keys are
+	// optional (see S3StorageService's constructor), so a deployment relying on
+	// ambient/web-identity credentials shouldn't fall back to local storage
+	// just because it correctly has no static keys configured.
+	if (env.S3_BUCKET) {
 		return new S3StorageService();
 	}
 

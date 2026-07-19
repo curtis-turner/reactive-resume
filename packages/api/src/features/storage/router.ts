@@ -6,7 +6,11 @@ import { getStorageService, isImageFile, processImageForUpload, uploadFile } fro
 
 const storageService = getStorageService();
 
-const fileSchema = z.file().max(10 * 1024 * 1024, "File size must be less than 10MB");
+// 20MB, up from the upstream default of 10MB: a modest safety margin now that
+// the picture crop dialog re-encodes as JPEG instead of PNG (see picture.tsx),
+// not a substitute fix for that -- this just covers unusually large crops or
+// non-picture uploads that don't go through the cropper at all.
+const fileSchema = z.file().max(20 * 1024 * 1024, "File size must be less than 20MB");
 
 const filenameSchema = z.object({
 	filename: z.string().min(1).describe("The path or filename of the file to delete."),

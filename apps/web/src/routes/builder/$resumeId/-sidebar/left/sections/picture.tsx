@@ -411,10 +411,21 @@ async function getCroppedImageBlob(imageSrc: string, pixelCrop: Area): Promise<B
 	);
 
 	return new Promise<Blob>((resolve, reject) => {
-		canvas.toBlob((blob) => {
-			if (blob) resolve(blob);
-			else reject(new Error("Canvas is empty"));
-		}, "image/png");
+		// JPEG, not PNG: PNG's lossless compression handles photographic content far
+		// worse than JPEG's -- a full-resolution phone photo crop re-encoded as PNG
+		// can land 10x+ larger than the original JPEG, which routinely blew past the
+		// upload size limit for anyone with a modern phone camera. Profile pictures
+		// are virtually always photos, so losing PNG transparency support here is an
+		// acceptable tradeoff for a dramatically smaller, still-visually-lossless-
+		// enough upload.
+		canvas.toBlob(
+			(blob) => {
+				if (blob) resolve(blob);
+				else reject(new Error("Canvas is empty"));
+			},
+			"image/jpeg",
+			0.92,
+		);
 	});
 }
 
